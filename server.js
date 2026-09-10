@@ -50,7 +50,7 @@ app.get("/", (req, res) => {
   res.json({
     name: "Presenta Live Server",
     status: "online",
-    version: "1.2.0"
+    version: "1.3.0"
   });
 });
 
@@ -66,10 +66,11 @@ app.get("/health", (req, res) => {
     "ABC123": {
       presentationId: "presentation-1",
       currentSlide: 0,
-      slides: [...],         // ← НОВО: запазваме слайдовете
-      title: "...",          // ← НОВО
-      teacherSocket: ws,     // ← НОВО: кой е учителят
-      clients: Set()
+      slides: [...],
+      title: "...",
+      teacherSocket: ws,
+      clients: Set(),
+      students: Map<ws, { name, joinedAt }>   // ← НОВО
     }
   }
 */
@@ -92,10 +93,11 @@ app.post("/api/sessions", (req, res) => {
   sessions.set(sessionId, {
     presentationId,
     currentSlide: 0,
-    slides: null,        // ← НОВО
-    title: null,         // ← НОВО
-    teacherSocket: null, // ← НОВО
-    clients: new Set()
+    slides: null,
+    title: null,
+    teacherSocket: null,
+    clients: new Set(),
+    students: new Map()   // 🔥 НОВО
   });
 
   console.log(`[SESSION] Created ${sessionId} for ${presentationId}`);
@@ -120,6 +122,8 @@ app.get("/api/sessions", (req, res) => {
       presentationId: session.presentationId,
       currentSlide: session.currentSlide,
       connectedClients: session.clients.size,
+      studentCount: session.students.size,   // 🔥 НОВО
+      students: Array.from(session.students.values()).map(s => s.name), // 🔥 НОВО
       hasSlides: !!session.slides
     });
   }
@@ -146,6 +150,8 @@ app.get("/api/sessions/:sessionId", (req, res) => {
     presentationId: session.presentationId,
     currentSlide: session.currentSlide,
     connectedClients: session.clients.size,
+    studentCount: session.students.size,       // 🔥 НОВО
+    students: Array.from(session.students.values()), // 🔥 НОВО
     hasSlides: !!session.slides
   });
 });
@@ -251,10 +257,20 @@ wss.on("connection", (socket, request) => {
     presentationId: session.presentationId,
     slide: session.currentSlide,
     connectedClients: session.clients.size,
-    // 🔥 Ако вече имаме слайдове – ги пращаме веднага
+    studentCount: session.students.size,   // 🔥 НОВО
+    students: Array.from(session.students.values()), // 🔥 НОВО
     slides: session.slides || undefined,
     title: session.title || undefined
   });
+
+  // 🔥 Изпращаме списъка с ученици на новия клиент (ако има такива)
+  if (session.students.size > 0) {
+    send(socket, {
+      type: "STUDENT_LIST",
+      students: Array.from(session.students.values()),
+      count: session.students.size
+    });
+  }
 
   // Ако има слайдове, веднага пращаме и PRESENTATION_DATA
   if (session.slides) {
@@ -296,6 +312,7 @@ wss.on("connection", (socket, request) => {
 
   socket.on("close", () => {
     session.clients.delete(socket);
+    session.students.delete(socket);   // 🔥 НОВО: махаме и ученика
 
     // Ако учителят е излязъл – изчистваме teacherSocket
     if (session.teacherSocket === socket) {
@@ -303,12 +320,19 @@ wss.on("connection", (socket, request) => {
     }
 
     console.log(
-      `[WS] Client disconnected → ${sessionId} | clients: ${session.clients.size}`
+      `[WS] Client disconnected → ${sessionId} | clients: ${session.clients.size} | students: ${session.students.size}`
     );
 
     broadcast(session, {
       type: "STUDENT_COUNT",
       count: session.clients.size
+    });
+
+    // 🔥 Изпращаме обновения списък с ученици
+    broadcast(session, {
+      type: "STUDENT_LIST",
+      students: Array.from(session.students.values()),
+      count: session.students.size
     });
   });
 
@@ -319,6 +343,7 @@ wss.on("connection", (socket, request) => {
   socket.on("error", (error) => {
     console.error(`[WS] Client error → ${sessionId}:`, error.message);
     session.clients.delete(socket);
+    session.students.delete(socket);   // 🔥 НОВО
   });
 });
 
@@ -345,7 +370,6 @@ function handleMessage(session, socket, message) {
 
       session.currentSlide = slide;
 
-      // 🔥 Ако учителят праща и слайдовете – запазваме ги
       if (message.slides && Array.isArray(message.slides)) {
         session.slides = message.slides;
         session.title = message.title || session.title;
@@ -355,7 +379,6 @@ function handleMessage(session, socket, message) {
       broadcast(session, {
         type: "SLIDE_CHANGED",
         slide,
-        // 🔥 Препредаваме и слайдовете, ако са дошли
         slides: message.slides || undefined,
         title: message.title || undefined
       });
@@ -365,7 +388,7 @@ function handleMessage(session, socket, message) {
     }
 
     // -----------------------------------------------------
-    // 🔥 TEACHER SENDS PRESENTATION DATA
+    // TEACHER SENDS PRESENTATION DATA
     // -----------------------------------------------------
 
     case "PRESENTATION_DATA": {
@@ -373,7 +396,6 @@ function handleMessage(session, socket, message) {
         return;
       }
 
-      // Запазваме слайдовете в сесията
       session.slides = message.slides;
       session.title = message.title || null;
       session.teacherSocket = socket;
@@ -382,7 +404,6 @@ function handleMessage(session, socket, message) {
         `[WS] Учител изпрати ${message.slides.length} слайда за сесия`
       );
 
-      // Broadcast към всички (включително ученици)
       broadcast(session, {
         type: "PRESENTATION_DATA",
         slides: message.slides,
@@ -394,7 +415,7 @@ function handleMessage(session, socket, message) {
     }
 
     // -----------------------------------------------------
-    // 🔥 STUDENT REQUESTS PRESENTATION
+    // STUDENT REQUESTS PRESENTATION
     // -----------------------------------------------------
 
     case "REQUEST_PRESENTATION": {
@@ -402,7 +423,6 @@ function handleMessage(session, socket, message) {
         `[WS] Получена заявка за презентация от клиент в сесия`
       );
 
-      // Ако вече имаме слайдове – изпращаме ги директно на питащия
       if (session.slides) {
         send(socket, {
           type: "PRESENTATION_DATA",
@@ -412,7 +432,6 @@ function handleMessage(session, socket, message) {
         });
         console.log(`📤 Изпратени ${session.slides.length} слайда на клиент`);
       } else {
-        // Ако още няма слайдове – питаме учителя (ако е свързан)
         if (session.teacherSocket && session.teacherSocket.readyState === 1) {
           send(session.teacherSocket, {
             type: "REQUEST_PRESENTATION"
@@ -435,22 +454,44 @@ function handleMessage(session, socket, message) {
 
       broadcast(session, {
         type: "REACTION",
-        reaction: message.reaction
+        reaction: message.reaction,
+        name: message.name || null   // 🔥 НОВО: име на ученика
       });
 
-      console.log(`[REACTION] ${message.reaction}`);
+      console.log(`[REACTION] ${message.name || "?"}: ${message.reaction}`);
       break;
     }
 
     // -----------------------------------------------------
-    // STUDENT JOINED
+    // 🔥 STUDENT JOINED (с име)
     // -----------------------------------------------------
 
     case "STUDENT_JOINED": {
+      // Записваме ученика с име в Map-а
+      if (message.name && typeof message.name === "string") {
+        session.students.set(socket, {
+          name: message.name.trim(),
+          joinedAt: message.joinedAt || Date.now()
+        });
+
+        console.log(
+          `👤 Ученик влезе: ${message.name} | Общо ученици: ${session.students.size}`
+        );
+      }
+
+      // Broadcast-ваме обновения списък на всички
+      broadcast(session, {
+        type: "STUDENT_LIST",
+        students: Array.from(session.students.values()),
+        count: session.students.size
+      });
+
+      // Също обновяваме и броя клиенти
       broadcast(session, {
         type: "STUDENT_COUNT",
         count: session.clients.size
       });
+
       break;
     }
 
@@ -464,7 +505,8 @@ function handleMessage(session, socket, message) {
       broadcast(session, {
         type: "POLL_ANSWER",
         questionId: message.questionId,
-        answer: message.answer
+        answer: message.answer,
+        name: message.name || null   // 🔥 НОВО
       });
       break;
     }
@@ -537,7 +579,7 @@ function generateSessionId() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("======================================");
-  console.log(" PRESENTA LIVE SERVER v1.2.0");
+  console.log(" PRESENTA LIVE SERVER v1.3.0");
   console.log("======================================");
   console.log(`Port: ${PORT}`);
   console.log("");
