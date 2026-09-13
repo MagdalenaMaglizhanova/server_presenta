@@ -16,11 +16,50 @@ const PORT = process.env.PORT || 10000;
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
+// 🔥 DEBUG: Показваме какво вижда сървърът
+console.log("");
+console.log("═══════════════════════════════════════════");
+console.log("🔍 SUPABASE DEBUG INFO:");
+console.log("═══════════════════════════════════════════");
+console.log("SUPABASE_URL exists?", !!supabaseUrl);
+console.log("SUPABASE_URL value:", supabaseUrl ? supabaseUrl.substring(0, 30) + "..." : "❌ UNDEFINED");
+console.log("SUPABASE_SERVICE_KEY exists?", !!supabaseKey);
+console.log("SUPABASE_SERVICE_KEY value:", supabaseKey ? supabaseKey.substring(0, 20) + "..." : "❌ UNDEFINED");
+console.log("");
+console.log("📋 Всички SUPABASE_* променливи в process.env:");
+const supabaseVars = Object.keys(process.env).filter(k => k.includes("SUPABASE") || k.includes("supabase"));
+if (supabaseVars.length === 0) {
+  console.log("  ❌ НЯМА нито една SUPABASE_* променлива!");
+} else {
+  supabaseVars.forEach(k => {
+    const val = process.env[k] || "";
+    console.log(`  ✓ ${k} = ${val.substring(0, 30)}...`);
+  });
+}
+console.log("");
+console.log("📋 Всички NEXT_PUBLIC_* променливи:");
+const nextVars = Object.keys(process.env).filter(k => k.startsWith("NEXT_PUBLIC_"));
+if (nextVars.length === 0) {
+  console.log("  (няма)");
+} else {
+  nextVars.forEach(k => {
+    const val = process.env[k] || "";
+    console.log(`  • ${k} = ${val.substring(0, 30)}...`);
+  });
+}
+console.log("═══════════════════════════════════════════");
+console.log("");
+
 let supabase = null;
 
 if (supabaseUrl && supabaseKey) {
-  supabase = createClient(supabaseUrl, supabaseKey);
-  console.log("[SUPABASE] ✅ Клиентът е конфигуриран");
+  try {
+    supabase = createClient(supabaseUrl, supabaseKey);
+    console.log("[SUPABASE] ✅ Клиентът е конфигуриран");
+  } catch (err) {
+    console.error("[SUPABASE] ❌ Грешка при createClient:", err.message);
+    supabase = null;
+  }
 } else {
   console.warn("[SUPABASE] ⚠️ Липсват credentials – DB функциите са изключени");
 }
@@ -79,6 +118,35 @@ app.get("/health", (req, res) => {
     status: "ok",
     service: "presenta-live-server",
     supabase: !!supabase
+  });
+});
+
+// 🔥 DEBUG ENDPOINT – показва Environment Variables (безопасно)
+app.get("/debug/env", (req, res) => {
+  const envVars = {};
+
+  Object.keys(process.env).forEach(key => {
+    if (key.includes("SUPABASE") || key.startsWith("NEXT_PUBLIC_") || key === "FRONTEND_URL") {
+      const value = process.env[key] || "";
+      envVars[key] = {
+        exists: true,
+        length: value.length,
+        preview: value.substring(0, 30) + (value.length > 30 ? "..." : "")
+      };
+    }
+  });
+
+  res.json({
+    totalEnvVars: Object.keys(process.env).length,
+    supabaseConfigured: !!supabase,
+    relevantVars: envVars,
+    expectedVars: [
+      "SUPABASE_URL",
+      "SUPABASE_SERVICE_KEY"
+    ],
+    hint: Object.keys(process.env).some(k => k.includes("SUPABASE"))
+      ? "✅ Намерени са SUPABASE променливи"
+      : "❌ НЕ са намерени SUPABASE променливи – провери Render Environment"
   });
 });
 
@@ -606,7 +674,6 @@ function handleMessage(session, socket, message) {
               if (error) {
                 console.warn("[DB] Viewer save error:", error.message);
               } else {
-                // Запазваме db viewer id за по-късно
                 const current = session.students.get(socket);
                 if (current) {
                   session.students.set(socket, { ...current, dbViewerId: data.id });
