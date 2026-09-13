@@ -16,40 +16,6 @@ const PORT = process.env.PORT || 10000;
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
-// 🔥 DEBUG: Показваме какво вижда сървърът
-console.log("");
-console.log("═══════════════════════════════════════════");
-console.log("🔍 SUPABASE DEBUG INFO:");
-console.log("═══════════════════════════════════════════");
-console.log("SUPABASE_URL exists?", !!supabaseUrl);
-console.log("SUPABASE_URL value:", supabaseUrl ? supabaseUrl.substring(0, 30) + "..." : "❌ UNDEFINED");
-console.log("SUPABASE_SERVICE_KEY exists?", !!supabaseKey);
-console.log("SUPABASE_SERVICE_KEY value:", supabaseKey ? supabaseKey.substring(0, 20) + "..." : "❌ UNDEFINED");
-console.log("");
-console.log("📋 Всички SUPABASE_* променливи в process.env:");
-const supabaseVars = Object.keys(process.env).filter(k => k.includes("SUPABASE") || k.includes("supabase"));
-if (supabaseVars.length === 0) {
-  console.log("  ❌ НЯМА нито една SUPABASE_* променлива!");
-} else {
-  supabaseVars.forEach(k => {
-    const val = process.env[k] || "";
-    console.log(`  ✓ ${k} = ${val.substring(0, 30)}...`);
-  });
-}
-console.log("");
-console.log("📋 Всички NEXT_PUBLIC_* променливи:");
-const nextVars = Object.keys(process.env).filter(k => k.startsWith("NEXT_PUBLIC_"));
-if (nextVars.length === 0) {
-  console.log("  (няма)");
-} else {
-  nextVars.forEach(k => {
-    const val = process.env[k] || "";
-    console.log(`  • ${k} = ${val.substring(0, 30)}...`);
-  });
-}
-console.log("═══════════════════════════════════════════");
-console.log("");
-
 let supabase = null;
 
 if (supabaseUrl && supabaseKey) {
@@ -108,7 +74,7 @@ app.get("/", (req, res) => {
   res.json({
     name: "Presenta Live Server",
     status: "online",
-    version: "2.0.0",
+    version: "2.1.0",
     supabase: !!supabase
   });
 });
@@ -118,35 +84,6 @@ app.get("/health", (req, res) => {
     status: "ok",
     service: "presenta-live-server",
     supabase: !!supabase
-  });
-});
-
-// 🔥 DEBUG ENDPOINT – показва Environment Variables (безопасно)
-app.get("/debug/env", (req, res) => {
-  const envVars = {};
-
-  Object.keys(process.env).forEach(key => {
-    if (key.includes("SUPABASE") || key.startsWith("NEXT_PUBLIC_") || key === "FRONTEND_URL") {
-      const value = process.env[key] || "";
-      envVars[key] = {
-        exists: true,
-        length: value.length,
-        preview: value.substring(0, 30) + (value.length > 30 ? "..." : "")
-      };
-    }
-  });
-
-  res.json({
-    totalEnvVars: Object.keys(process.env).length,
-    supabaseConfigured: !!supabase,
-    relevantVars: envVars,
-    expectedVars: [
-      "SUPABASE_URL",
-      "SUPABASE_SERVICE_KEY"
-    ],
-    hint: Object.keys(process.env).some(k => k.includes("SUPABASE"))
-      ? "✅ Намерени са SUPABASE променливи"
-      : "❌ НЕ са намерени SUPABASE променливи – провери Render Environment"
   });
 });
 
@@ -303,7 +240,6 @@ app.post("/api/sessions", async (req, res) => {
   const sessionId = generateSessionId();
   const startTime = new Date().toISOString();
 
-  // 🆕 Записваме сесията в Supabase (ако е конфигуриран)
   let dbSessionId = null;
   if (supabase) {
     try {
@@ -439,7 +375,6 @@ app.delete("/api/sessions/:sessionId", async (req, res) => {
     return res.status(404).json({ error: "Session not found" });
   }
 
-  // 🔥 Записваме край на сесията в DB
   if (supabase && session.dbSessionId) {
     try {
       await supabase
@@ -659,7 +594,6 @@ function handleMessage(session, socket, message) {
 
         console.log(`👤 ${studentData.avatar} ${studentData.name} влезе | Общо: ${session.students.size}`);
 
-        // 🆕 Записваме в Supabase
         if (supabase && session.dbSessionId) {
           supabase
             .from("viewers")
@@ -709,6 +643,32 @@ function handleMessage(session, socket, message) {
       });
 
       console.log(`[REACTION] ${message.avatar || ""} ${message.name || "?"}: ${message.reaction}`);
+
+      // 💾 Записваме в Supabase
+      if (supabase && session.dbSessionId) {
+        let viewerId = null;
+        for (const [, student] of session.students.entries()) {
+          if (student.name === message.name) {
+            viewerId = student.dbViewerId;
+            break;
+          }
+        }
+
+        supabase
+          .from("reactions")
+          .insert({
+            session_id: session.dbSessionId,
+            viewer_id: viewerId,
+            slide_index: message.slide ?? session.currentSlide,
+            emoji: message.reaction
+          })
+          .then(({ error }) => {
+            if (error) {
+              console.warn("[DB] Reaction save error:", error.message);
+            }
+          });
+      }
+
       break;
     }
 
@@ -778,7 +738,7 @@ function generateSessionId() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("======================================");
-  console.log(" PRESENTA LIVE SERVER v2.0.0");
+  console.log(" PRESENTA LIVE SERVER v2.1.0");
   console.log("======================================");
   console.log(`Port: ${PORT}`);
   console.log("");
