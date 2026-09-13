@@ -15,8 +15,8 @@ const PORT = process.env.PORT || 10000;
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
-  "https://presenta-rose.vercel.app",        // ← добави това
-  "https://presenta-rose.vercel.app/",       // ← и с наклонена черта (за всеки случай)
+  "https://presenta-rose.vercel.app",
+  "https://presenta-rose.vercel.app/",
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
@@ -52,7 +52,7 @@ app.get("/", (req, res) => {
   res.json({
     name: "Presenta Live Server",
     status: "online",
-    version: "1.3.0"
+    version: "1.4.0"
   });
 });
 
@@ -72,7 +72,7 @@ app.get("/health", (req, res) => {
       title: "...",
       teacherSocket: ws,
       clients: Set(),
-      students: Map<ws, { name, joinedAt }>   // ← НОВО
+      students: Map<ws, { name, avatar, joinedAt }>   // ← с аватар
     }
   }
 */
@@ -99,7 +99,7 @@ app.post("/api/sessions", (req, res) => {
     title: null,
     teacherSocket: null,
     clients: new Set(),
-    students: new Map()   // 🔥 НОВО
+    students: new Map()
   });
 
   console.log(`[SESSION] Created ${sessionId} for ${presentationId}`);
@@ -124,8 +124,8 @@ app.get("/api/sessions", (req, res) => {
       presentationId: session.presentationId,
       currentSlide: session.currentSlide,
       connectedClients: session.clients.size,
-      studentCount: session.students.size,   // 🔥 НОВО
-      students: Array.from(session.students.values()).map(s => s.name), // 🔥 НОВО
+      studentCount: session.students.size,
+      students: Array.from(session.students.values()),
       hasSlides: !!session.slides
     });
   }
@@ -152,8 +152,8 @@ app.get("/api/sessions/:sessionId", (req, res) => {
     presentationId: session.presentationId,
     currentSlide: session.currentSlide,
     connectedClients: session.clients.size,
-    studentCount: session.students.size,       // 🔥 НОВО
-    students: Array.from(session.students.values()), // 🔥 НОВО
+    studentCount: session.students.size,
+    students: Array.from(session.students.values()),
     hasSlides: !!session.slides
   });
 });
@@ -259,8 +259,8 @@ wss.on("connection", (socket, request) => {
     presentationId: session.presentationId,
     slide: session.currentSlide,
     connectedClients: session.clients.size,
-    studentCount: session.students.size,   // 🔥 НОВО
-    students: Array.from(session.students.values()), // 🔥 НОВО
+    studentCount: session.students.size,
+    students: Array.from(session.students.values()),
     slides: session.slides || undefined,
     title: session.title || undefined
   });
@@ -314,9 +314,8 @@ wss.on("connection", (socket, request) => {
 
   socket.on("close", () => {
     session.clients.delete(socket);
-    session.students.delete(socket);   // 🔥 НОВО: махаме и ученика
+    session.students.delete(socket);
 
-    // Ако учителят е излязъл – изчистваме teacherSocket
     if (session.teacherSocket === socket) {
       session.teacherSocket = null;
     }
@@ -330,7 +329,6 @@ wss.on("connection", (socket, request) => {
       count: session.clients.size
     });
 
-    // 🔥 Изпращаме обновения списък с ученици
     broadcast(session, {
       type: "STUDENT_LIST",
       students: Array.from(session.students.values()),
@@ -345,7 +343,7 @@ wss.on("connection", (socket, request) => {
   socket.on("error", (error) => {
     console.error(`[WS] Client error → ${sessionId}:`, error.message);
     session.clients.delete(socket);
-    session.students.delete(socket);   // 🔥 НОВО
+    session.students.delete(socket);
   });
 });
 
@@ -457,27 +455,31 @@ function handleMessage(session, socket, message) {
       broadcast(session, {
         type: "REACTION",
         reaction: message.reaction,
-        name: message.name || null   // 🔥 НОВО: име на ученика
+        name: message.name || null,
+        avatar: message.avatar || null   // 🔥 НОВО
       });
 
-      console.log(`[REACTION] ${message.name || "?"}: ${message.reaction}`);
+      console.log(
+        `[REACTION] ${message.avatar || ""} ${message.name || "?"}: ${message.reaction}`
+      );
       break;
     }
 
     // -----------------------------------------------------
-    // 🔥 STUDENT JOINED (с име)
+    // 🔥 STUDENT JOINED (с име + аватар)
     // -----------------------------------------------------
 
     case "STUDENT_JOINED": {
-      // Записваме ученика с име в Map-а
+      // Записваме ученика с име и аватар в Map-а
       if (message.name && typeof message.name === "string") {
         session.students.set(socket, {
           name: message.name.trim(),
+          avatar: message.avatar || "🦊",   // 🔥 НОВО: fallback аватар
           joinedAt: message.joinedAt || Date.now()
         });
 
         console.log(
-          `👤 Ученик влезе: ${message.name} | Общо ученици: ${session.students.size}`
+          `👤 ${message.avatar || "🦊"} ${message.name} влезе | Общо ученици: ${session.students.size}`
         );
       }
 
@@ -508,7 +510,8 @@ function handleMessage(session, socket, message) {
         type: "POLL_ANSWER",
         questionId: message.questionId,
         answer: message.answer,
-        name: message.name || null   // 🔥 НОВО
+        name: message.name || null,
+        avatar: message.avatar || null   // 🔥 НОВО
       });
       break;
     }
@@ -581,7 +584,7 @@ function generateSessionId() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("======================================");
-  console.log(" PRESENTA LIVE SERVER v1.3.0");
+  console.log(" PRESENTA LIVE SERVER v1.4.0");
   console.log("======================================");
   console.log(`Port: ${PORT}`);
   console.log("");
