@@ -2,11 +2,28 @@ const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { WebSocketServer } = require("ws");
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 const server = http.createServer(app);
 
 const PORT = process.env.PORT || 10000;
+
+// ---------------------------------------------------------
+// SUPABASE CLIENT
+// ---------------------------------------------------------
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+
+let supabase = null;
+
+if (supabaseUrl && supabaseKey) {
+  supabase = createClient(supabaseUrl, supabaseKey);
+  console.log("[SUPABASE] ✅ Клиентът е конфигуриран");
+} else {
+  console.warn("[SUPABASE] ⚠️ Липсват credentials – DB функциите са изключени");
+}
 
 // ---------------------------------------------------------
 // CONFIG
@@ -52,54 +69,209 @@ app.get("/", (req, res) => {
   res.json({
     name: "Presenta Live Server",
     status: "online",
-    version: "1.4.0"
+    version: "2.0.0",
+    supabase: !!supabase
   });
 });
 
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "presenta-live-server" });
+  res.json({
+    status: "ok",
+    service: "presenta-live-server",
+    supabase: !!supabase
+  });
+});
+
+// ═════════════════════════════════════════════════════════
+// 💾 PRESENTATIONS CRUD
+// ═════════════════════════════════════════════════════════
+
+// ---------------------------------------------------------
+// SAVE / CREATE PRESENTATION
+// ---------------------------------------------------------
+
+app.post("/api/presentations", async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: "Database not configured" });
+
+  const { title, slides } = req.body;
+
+  if (!title || !Array.isArray(slides)) {
+    return res.status(400).json({ error: "title and slides are required" });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("presentations")
+      .insert({ title, slides })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log(`💾 Запазена презентация: ${data.id} | ${title}`);
+    res.json(data);
+  } catch (err) {
+    console.error("[DB] Save error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------
-// LIVE SESSIONS
+// LIST ALL PRESENTATIONS
 // ---------------------------------------------------------
-/*
-  sessions = {
-    "ABC123": {
-      presentationId: "presentation-1",
-      currentSlide: 0,
-      slides: [...],
-      title: "...",
-      teacherSocket: ws,
-      clients: Set(),
-      students: Map<ws, { name, avatar, joinedAt }>   // ← с аватар
-    }
+
+app.get("/api/presentations", async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: "Database not configured" });
+
+  try {
+    const { data, error } = await supabase
+      .from("presentations")
+      .select("id, title, created_at, updated_at")
+      .order("updated_at", { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ presentations: data });
+  } catch (err) {
+    console.error("[DB] List error:", err.message);
+    res.status(500).json({ error: err.message });
   }
-*/
+});
+
+// ---------------------------------------------------------
+// GET ONE PRESENTATION (with slides)
+// ---------------------------------------------------------
+
+app.get("/api/presentations/:id", async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: "Database not configured" });
+
+  try {
+    const { data, error } = await supabase
+      .from("presentations")
+      .select("*")
+      .eq("id", req.params.id)
+      .single();
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error("[DB] Get error:", err.message);
+    res.status(404).json({ error: "Presentation not found" });
+  }
+});
+
+// ---------------------------------------------------------
+// UPDATE PRESENTATION
+// ---------------------------------------------------------
+
+app.put("/api/presentations/:id", async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: "Database not configured" });
+
+  const { title, slides } = req.body;
+
+  try {
+    const updates = {};
+    if (title !== undefined) updates.title = title;
+    if (slides !== undefined) updates.slides = slides;
+
+    const { data, error } = await supabase
+      .from("presentations")
+      .update(updates)
+      .eq("id", req.params.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log(`💾 Обновена презентация: ${data.id} | ${data.title}`);
+    res.json(data);
+  } catch (err) {
+    console.error("[DB] Update error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------
+// DELETE PRESENTATION
+// ---------------------------------------------------------
+
+app.delete("/api/presentations/:id", async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: "Database not configured" });
+
+  try {
+    const { error } = await supabase
+      .from("presentations")
+      .delete()
+      .eq("id", req.params.id);
+
+    if (error) throw error;
+
+    console.log(`🗑️ Изтрита презентация: ${req.params.id}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[DB] Delete error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═════════════════════════════════════════════════════════
+// 🎬 LIVE SESSIONS
+// ═════════════════════════════════════════════════════════
 
 const sessions = new Map();
 
 // ---------------------------------------------------------
-// CREATE SESSION
+// CREATE SESSION (start presentation)
 // ---------------------------------------------------------
 
-app.post("/api/sessions", (req, res) => {
-  const { presentationId } = req.body;
+app.post("/api/sessions", async (req, res) => {
+  const { presentationId, presentationTitle, totalSlides } = req.body;
 
   if (!presentationId) {
     return res.status(400).json({ error: "presentationId is required" });
   }
 
   const sessionId = generateSessionId();
+  const startTime = new Date().toISOString();
+
+  // 🆕 Записваме сесията в Supabase (ако е конфигуриран)
+  let dbSessionId = null;
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("sessions")
+        .insert({
+          session_code: sessionId,
+          presentation_id: presentationId,
+          presentation_title: presentationTitle || null,
+          total_slides: totalSlides || 0
+        })
+        .select()
+        .single();
+
+      if (!error && data) {
+        dbSessionId = data.id;
+        console.log(`💾 Записана сесия в DB: ${dbSessionId}`);
+      } else if (error) {
+        console.warn("[DB] Session save error:", error.message);
+      }
+    } catch (err) {
+      console.warn("[DB] Session save skipped:", err.message);
+    }
+  }
 
   sessions.set(sessionId, {
     presentationId,
+    presentationTitle: presentationTitle || null,
+    dbSessionId,
     currentSlide: 0,
     slides: null,
     title: null,
     teacherSocket: null,
     clients: new Set(),
-    students: new Map()
+    students: new Map(),
+    startedAt: startTime
   });
 
   console.log(`[SESSION] Created ${sessionId} for ${presentationId}`);
@@ -107,7 +279,8 @@ app.post("/api/sessions", (req, res) => {
   res.json({
     sessionId,
     presentationId,
-    currentSlide: 0
+    currentSlide: 0,
+    dbSessionId
   });
 });
 
@@ -191,11 +364,24 @@ app.post("/api/sessions/:sessionId/slide", (req, res) => {
 // DELETE / END SESSION
 // ---------------------------------------------------------
 
-app.delete("/api/sessions/:sessionId", (req, res) => {
+app.delete("/api/sessions/:sessionId", async (req, res) => {
   const session = sessions.get(req.params.sessionId);
 
   if (!session) {
     return res.status(404).json({ error: "Session not found" });
+  }
+
+  // 🔥 Записваме край на сесията в DB
+  if (supabase && session.dbSessionId) {
+    try {
+      await supabase
+        .from("sessions")
+        .update({ ended_at: new Date().toISOString() })
+        .eq("id", session.dbSessionId);
+      console.log(`💾 Записан край на сесия ${session.dbSessionId}`);
+    } catch (err) {
+      console.warn("[DB] End session error:", err.message);
+    }
   }
 
   broadcast(session, { type: "SESSION_ENDED" });
@@ -225,11 +411,7 @@ const wss = new WebSocketServer({
 });
 
 wss.on("connection", (socket, request) => {
-  const url = new URL(
-    request.url,
-    `http://${request.headers.host}`
-  );
-
+  const url = new URL(request.url, `http://${request.headers.host}`);
   const sessionId = url.searchParams.get("session");
 
   if (!sessionId) {
@@ -246,13 +428,7 @@ wss.on("connection", (socket, request) => {
 
   session.clients.add(socket);
 
-  console.log(
-    `[WS] Client connected → ${sessionId} | clients: ${session.clients.size}`
-  );
-
-  // -------------------------------------------------------
-  // SEND CURRENT SESSION STATE (със слайдове, ако има)
-  // -------------------------------------------------------
+  console.log(`[WS] Client connected → ${sessionId} | clients: ${session.clients.size}`);
 
   send(socket, {
     type: "SESSION_STATE",
@@ -265,7 +441,6 @@ wss.on("connection", (socket, request) => {
     title: session.title || undefined
   });
 
-  // 🔥 Изпращаме списъка с ученици на новия клиент (ако има такива)
   if (session.students.size > 0) {
     send(socket, {
       type: "STUDENT_LIST",
@@ -274,7 +449,6 @@ wss.on("connection", (socket, request) => {
     });
   }
 
-  // Ако има слайдове, веднага пращаме и PRESENTATION_DATA
   if (session.slides) {
     console.log(`📤 Изпращаме ${session.slides.length} слайда на нов клиент`);
     send(socket, {
@@ -285,15 +459,10 @@ wss.on("connection", (socket, request) => {
     });
   }
 
-  // Notify everyone about updated client count
   broadcast(session, {
     type: "STUDENT_COUNT",
     count: session.clients.size
   });
-
-  // -------------------------------------------------------
-  // MESSAGE
-  // -------------------------------------------------------
 
   socket.on("message", (raw) => {
     try {
@@ -301,16 +470,9 @@ wss.on("connection", (socket, request) => {
       handleMessage(session, socket, message);
     } catch (error) {
       console.error("[WS] Invalid message:", error.message);
-      send(socket, {
-        type: "ERROR",
-        message: "Invalid message"
-      });
+      send(socket, { type: "ERROR", message: "Invalid message" });
     }
   });
-
-  // -------------------------------------------------------
-  // CLOSE
-  // -------------------------------------------------------
 
   socket.on("close", () => {
     session.clients.delete(socket);
@@ -320,9 +482,7 @@ wss.on("connection", (socket, request) => {
       session.teacherSocket = null;
     }
 
-    console.log(
-      `[WS] Client disconnected → ${sessionId} | clients: ${session.clients.size} | students: ${session.students.size}`
-    );
+    console.log(`[WS] Client disconnected → ${sessionId} | clients: ${session.clients.size} | students: ${session.students.size}`);
 
     broadcast(session, {
       type: "STUDENT_COUNT",
@@ -335,10 +495,6 @@ wss.on("connection", (socket, request) => {
       count: session.students.size
     });
   });
-
-  // -------------------------------------------------------
-  // ERROR
-  // -------------------------------------------------------
 
   socket.on("error", (error) => {
     console.error(`[WS] Client error → ${sessionId}:`, error.message);
@@ -355,10 +511,6 @@ function handleMessage(session, socket, message) {
   if (!message || !message.type) return;
 
   switch (message.type) {
-
-    // -----------------------------------------------------
-    // TEACHER CHANGES SLIDE
-    // -----------------------------------------------------
 
     case "SLIDE_CHANGED": {
       const slide = Number(message.slide);
@@ -387,22 +539,14 @@ function handleMessage(session, socket, message) {
       break;
     }
 
-    // -----------------------------------------------------
-    // TEACHER SENDS PRESENTATION DATA
-    // -----------------------------------------------------
-
     case "PRESENTATION_DATA": {
-      if (!message.slides || !Array.isArray(message.slides)) {
-        return;
-      }
+      if (!message.slides || !Array.isArray(message.slides)) return;
 
       session.slides = message.slides;
       session.title = message.title || null;
       session.teacherSocket = socket;
 
-      console.log(
-        `[WS] Учител изпрати ${message.slides.length} слайда за сесия`
-      );
+      console.log(`[WS] Учител изпрати ${message.slides.length} слайда за сесия`);
 
       broadcast(session, {
         type: "PRESENTATION_DATA",
@@ -414,14 +558,8 @@ function handleMessage(session, socket, message) {
       break;
     }
 
-    // -----------------------------------------------------
-    // STUDENT REQUESTS PRESENTATION
-    // -----------------------------------------------------
-
     case "REQUEST_PRESENTATION": {
-      console.log(
-        `[WS] Получена заявка за презентация от клиент в сесия`
-      );
+      console.log(`[WS] Получена заявка за презентация`);
 
       if (session.slides) {
         send(socket, {
@@ -433,64 +571,58 @@ function handleMessage(session, socket, message) {
         console.log(`📤 Изпратени ${session.slides.length} слайда на клиент`);
       } else {
         if (session.teacherSocket && session.teacherSocket.readyState === 1) {
-          send(session.teacherSocket, {
-            type: "REQUEST_PRESENTATION"
-          });
+          send(session.teacherSocket, { type: "REQUEST_PRESENTATION" });
           console.log(`📤 Препредадена заявка към учителя`);
-        } else {
-          console.log(`⚠️ Няма учител в сесията и няма слайдове`);
         }
       }
 
       break;
     }
 
-    // -----------------------------------------------------
-    // STUDENT REACTION
-    // -----------------------------------------------------
-
-    case "REACTION": {
-      if (!message.reaction) return;
-
-      broadcast(session, {
-        type: "REACTION",
-        reaction: message.reaction,
-        name: message.name || null,
-        avatar: message.avatar || null   // 🔥 НОВО
-      });
-
-      console.log(
-        `[REACTION] ${message.avatar || ""} ${message.name || "?"}: ${message.reaction}`
-      );
-      break;
-    }
-
-    // -----------------------------------------------------
-    // 🔥 STUDENT JOINED (с име + аватар)
-    // -----------------------------------------------------
-
     case "STUDENT_JOINED": {
-      // Записваме ученика с име и аватар в Map-а
       if (message.name && typeof message.name === "string") {
-        session.students.set(socket, {
+        const studentData = {
           name: message.name.trim(),
-          avatar: message.avatar || "🦊",   // 🔥 НОВО: fallback аватар
+          avatar: message.avatar || "🦊",
           joinedAt: message.joinedAt || Date.now()
-        });
+        };
 
-        console.log(
-          `👤 ${message.avatar || "🦊"} ${message.name} влезе | Общо ученици: ${session.students.size}`
-        );
+        session.students.set(socket, studentData);
+
+        console.log(`👤 ${studentData.avatar} ${studentData.name} влезе | Общо: ${session.students.size}`);
+
+        // 🆕 Записваме в Supabase
+        if (supabase && session.dbSessionId) {
+          supabase
+            .from("viewers")
+            .insert({
+              session_id: session.dbSessionId,
+              student_name: studentData.name,
+              student_avatar: studentData.avatar
+            })
+            .select()
+            .single()
+            .then(({ data, error }) => {
+              if (error) {
+                console.warn("[DB] Viewer save error:", error.message);
+              } else {
+                // Запазваме db viewer id за по-късно
+                const current = session.students.get(socket);
+                if (current) {
+                  session.students.set(socket, { ...current, dbViewerId: data.id });
+                }
+                console.log(`💾 Viewer записан в DB: ${data.id}`);
+              }
+            });
+        }
       }
 
-      // Broadcast-ваме обновения списък на всички
       broadcast(session, {
         type: "STUDENT_LIST",
         students: Array.from(session.students.values()),
         count: session.students.size
       });
 
-      // Също обновяваме и броя клиенти
       broadcast(session, {
         type: "STUDENT_COUNT",
         count: session.clients.size
@@ -499,9 +631,19 @@ function handleMessage(session, socket, message) {
       break;
     }
 
-    // -----------------------------------------------------
-    // POLL ANSWER
-    // -----------------------------------------------------
+    case "REACTION": {
+      if (!message.reaction) return;
+
+      broadcast(session, {
+        type: "REACTION",
+        reaction: message.reaction,
+        name: message.name || null,
+        avatar: message.avatar || null
+      });
+
+      console.log(`[REACTION] ${message.avatar || ""} ${message.name || "?"}: ${message.reaction}`);
+      break;
+    }
 
     case "POLL_ANSWER": {
       if (!message.questionId) return;
@@ -511,23 +653,15 @@ function handleMessage(session, socket, message) {
         questionId: message.questionId,
         answer: message.answer,
         name: message.name || null,
-        avatar: message.avatar || null   // 🔥 НОВО
+        avatar: message.avatar || null
       });
       break;
     }
-
-    // -----------------------------------------------------
-    // PING
-    // -----------------------------------------------------
 
     case "PING": {
       send(socket, { type: "PONG" });
       break;
     }
-
-    // -----------------------------------------------------
-    // DEFAULT
-    // -----------------------------------------------------
 
     default:
       console.log(`[WS] Unknown message type: ${message.type}`);
@@ -535,7 +669,7 @@ function handleMessage(session, socket, message) {
 }
 
 // ---------------------------------------------------------
-// BROADCAST
+// BROADCAST & SEND
 // ---------------------------------------------------------
 
 function broadcast(session, message) {
@@ -552,10 +686,6 @@ function broadcast(session, message) {
   }
 }
 
-// ---------------------------------------------------------
-// SEND
-// ---------------------------------------------------------
-
 function send(socket, message) {
   if (socket.readyState === 1) {
     try {
@@ -571,10 +701,7 @@ function send(socket, message) {
 // ---------------------------------------------------------
 
 function generateSessionId() {
-  return Math.random()
-    .toString(36)
-    .substring(2, 8)
-    .toUpperCase();
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
 // ---------------------------------------------------------
@@ -584,9 +711,12 @@ function generateSessionId() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("======================================");
-  console.log(" PRESENTA LIVE SERVER v1.4.0");
+  console.log(" PRESENTA LIVE SERVER v2.0.0");
   console.log("======================================");
   console.log(`Port: ${PORT}`);
+  console.log("");
+  console.log("Supabase:");
+  console.log(`  ${supabase ? "✅ Connected" : "⚠️ Not configured"}`);
   console.log("");
   console.log("Allowed origins:");
   allowedOrigins.forEach((origin) => {
