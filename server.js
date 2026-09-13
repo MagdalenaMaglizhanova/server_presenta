@@ -15,6 +15,8 @@ const PORT = process.env.PORT || 10000;
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
+  "https://presenta-rose.vercel.app",        // ← добави това
+  "https://presenta-rose.vercel.app/",       // ← и с наклонена черта (за всеки случай)
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
