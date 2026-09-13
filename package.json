@@ -1,13 +1,14 @@
 {
   "name": "presenta-server",
-  "version": "1.0.0",
-  "description": "Presenta live presentation server",
+  "version": "2.0.0",
+  "description": "Presenta live presentation server with Supabase integration",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "ws": "^8.18.3"
