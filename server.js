@@ -74,7 +74,7 @@ app.get("/", (req, res) => {
   res.json({
     name: "Presenta Live Server",
     status: "online",
-    version: "2.1.0",
+    version: "2.2.0",
     supabase: !!supabase
   });
 });
@@ -644,7 +644,6 @@ function handleMessage(session, socket, message) {
 
       console.log(`[REACTION] ${message.avatar || ""} ${message.name || "?"}: ${message.reaction}`);
 
-      // 💾 Записваме в Supabase
       if (supabase && session.dbSessionId) {
         let viewerId = null;
         for (const [, student] of session.students.entries()) {
@@ -672,16 +671,86 @@ function handleMessage(session, socket, message) {
       break;
     }
 
-    case "POLL_ANSWER": {
-      if (!message.questionId) return;
+    // ═════════════════════════════════════════════════════
+    // 📝 POLL / QUIZ ANSWER (НОВО - записва в DB)
+    // ═════════════════════════════════════════════════════
 
+    case "POLL_ANSWER": {
+      // Поддържаме и стария формат (message.answer), и новия (message.answerIndex)
+      const hasNewFormat = message.answerIndex !== undefined;
+      const hasOldFormat = message.answer !== undefined;
+
+      if (!hasNewFormat && !hasOldFormat) return;
+
+      const slideIndex =
+        message.slideIndex !== undefined
+          ? message.slideIndex
+          : session.currentSlide;
+
+      const answerIndex =
+        message.answerIndex !== undefined ? message.answerIndex : null;
+
+      const answerText =
+        message.answerText || message.answer || "";
+
+      const questionText = message.question || "";
+
+      const isCorrect =
+        message.isCorrect !== undefined ? message.isCorrect : null;
+
+      const slideType = message.slideType || "poll";
+
+      console.log(
+        `📝 Отговор: ${message.avatar || ""} ${message.name || "?"} → слайд ${slideIndex}, опция ${answerIndex ?? "?"}${
+          isCorrect !== null ? ` (${isCorrect ? "✅ верен" : "❌ грешен"})` : ""
+        }`
+      );
+
+      // Broadcast към всички (вкл. учителя за live статистика)
       broadcast(session, {
         type: "POLL_ANSWER",
-        questionId: message.questionId,
-        answer: message.answer,
+        slideIndex,
+        answerIndex,
+        answerText,
+        question: questionText,
+        isCorrect,
+        slideType,
         name: message.name || null,
-        avatar: message.avatar || null
+        avatar: message.avatar || null,
+        timestamp: message.timestamp || Date.now()
       });
+
+      // 💾 Записваме в Supabase
+      if (supabase && session.dbSessionId) {
+        // Намираме viewer_id по име
+        let viewerId = null;
+        for (const [, student] of session.students.entries()) {
+          if (student.name === message.name) {
+            viewerId = student.dbViewerId;
+            break;
+          }
+        }
+
+        supabase
+          .from("answers")
+          .insert({
+            session_id: session.dbSessionId,
+            viewer_id: viewerId,
+            slide_index: slideIndex,
+            question: questionText,
+            answer_index: answerIndex,
+            answer_text: answerText,
+            is_correct: isCorrect
+          })
+          .then(({ error }) => {
+            if (error) {
+              console.warn("[DB] Answer save error:", error.message);
+            } else {
+              console.log(`💾 Отговор записан в DB (slide ${slideIndex})`);
+            }
+          });
+      }
+
       break;
     }
 
@@ -738,7 +807,7 @@ function generateSessionId() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("======================================");
-  console.log(" PRESENTA LIVE SERVER v2.1.0");
+  console.log(" PRESENTA LIVE SERVER v2.2.0");
   console.log("======================================");
   console.log(`Port: ${PORT}`);
   console.log("");
