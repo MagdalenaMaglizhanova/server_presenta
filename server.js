@@ -74,7 +74,7 @@ app.get("/", (req, res) => {
   res.json({
     name: "Presenta Live Server",
     status: "online",
-    version: "2.2.0",
+    version: "2.3.0",
     supabase: !!supabase
   });
 });
@@ -83,6 +83,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     service: "presenta-live-server",
+    version: "2.3.0",
     supabase: !!supabase
   });
 });
@@ -98,7 +99,7 @@ app.get("/health", (req, res) => {
 app.post("/api/presentations", async (req, res) => {
   if (!supabase) return res.status(503).json({ error: "Database not configured" });
 
-  const { title, slides } = req.body;
+  const { title, slides, courseId } = req.body;
 
   if (!title || !Array.isArray(slides)) {
     return res.status(400).json({ error: "title and slides are required" });
@@ -107,13 +108,17 @@ app.post("/api/presentations", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("presentations")
-      .insert({ title, slides })
+      .insert({
+        title,
+        slides,
+        course_id: courseId || null,      // ⭐ ново
+      })
       .select()
       .single();
 
     if (error) throw error;
 
-    console.log(`💾 Запазена презентация: ${data.id} | ${title}`);
+    console.log(`💾 Запазена презентация: ${data.id} | ${title} | course: ${courseId || "—"}`);
     res.json(data);
   } catch (err) {
     console.error("[DB] Save error:", err.message);
@@ -131,12 +136,21 @@ app.get("/api/presentations", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("presentations")
-      .select("id, title, created_at, updated_at")
+      .select("id, title, course_id, created_at, updated_at")   // ⭐ добавен course_id
       .order("updated_at", { ascending: false });
 
     if (error) throw error;
 
-    res.json({ presentations: data });
+    // Мапваме course_id → courseId (frontend очаква camelCase)
+    const presentations = (data || []).map((p) => ({
+      id: p.id,
+      title: p.title,
+      courseId: p.course_id || null,
+      created_at: p.created_at,
+      updated_at: p.updated_at,
+    }));
+
+    res.json({ presentations });
   } catch (err) {
     console.error("[DB] List error:", err.message);
     res.status(500).json({ error: err.message });
@@ -159,7 +173,15 @@ app.get("/api/presentations/:id", async (req, res) => {
 
     if (error) throw error;
 
-    res.json(data);
+    // Мапваме course_id → courseId
+    res.json({
+      id: data.id,
+      title: data.title,
+      slides: data.slides,
+      courseId: data.course_id || null,   // ⭐
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+    });
   } catch (err) {
     console.error("[DB] Get error:", err.message);
     res.status(404).json({ error: "Presentation not found" });
@@ -173,12 +195,13 @@ app.get("/api/presentations/:id", async (req, res) => {
 app.put("/api/presentations/:id", async (req, res) => {
   if (!supabase) return res.status(503).json({ error: "Database not configured" });
 
-  const { title, slides } = req.body;
+  const { title, slides, courseId } = req.body;
 
   try {
     const updates = {};
     if (title !== undefined) updates.title = title;
     if (slides !== undefined) updates.slides = slides;
+    if (courseId !== undefined) updates.course_id = courseId || null;  // ⭐
 
     const { data, error } = await supabase
       .from("presentations")
@@ -189,8 +212,15 @@ app.put("/api/presentations/:id", async (req, res) => {
 
     if (error) throw error;
 
-    console.log(`💾 Обновена презентация: ${data.id} | ${data.title}`);
-    res.json(data);
+    console.log(`💾 Обновена презентация: ${data.id} | ${data.title} | course: ${data.course_id || "—"}`);
+    res.json({
+      id: data.id,
+      title: data.title,
+      slides: data.slides,
+      courseId: data.course_id || null,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+    });
   } catch (err) {
     console.error("[DB] Update error:", err.message);
     res.status(500).json({ error: err.message });
@@ -671,12 +701,7 @@ function handleMessage(session, socket, message) {
       break;
     }
 
-    // ═════════════════════════════════════════════════════
-    // 📝 POLL / QUIZ ANSWER (НОВО - записва в DB)
-    // ═════════════════════════════════════════════════════
-
     case "POLL_ANSWER": {
-      // Поддържаме и стария формат (message.answer), и новия (message.answerIndex)
       const hasNewFormat = message.answerIndex !== undefined;
       const hasOldFormat = message.answer !== undefined;
 
@@ -706,7 +731,6 @@ function handleMessage(session, socket, message) {
         }`
       );
 
-      // Broadcast към всички (вкл. учителя за live статистика)
       broadcast(session, {
         type: "POLL_ANSWER",
         slideIndex,
@@ -720,9 +744,7 @@ function handleMessage(session, socket, message) {
         timestamp: message.timestamp || Date.now()
       });
 
-      // 💾 Записваме в Supabase
       if (supabase && session.dbSessionId) {
-        // Намираме viewer_id по име
         let viewerId = null;
         for (const [, student] of session.students.entries()) {
           if (student.name === message.name) {
@@ -807,7 +829,7 @@ function generateSessionId() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("======================================");
-  console.log(" PRESENTA LIVE SERVER v2.2.0");
+  console.log(" PRESENTA LIVE SERVER v2.3.0");
   console.log("======================================");
   console.log(`Port: ${PORT}`);
   console.log("");
