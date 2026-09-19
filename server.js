@@ -39,6 +39,8 @@ const allowedOrigins = [
   "http://localhost:5174",
   "https://presenta-rose.vercel.app",
   "https://presenta-rose.vercel.app/",
+  "https://magcommunity.vercel.app",          // ⭐ нов
+  "https://magcommunity.vercel.app/", 
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
