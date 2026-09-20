@@ -39,8 +39,8 @@ const allowedOrigins = [
   "http://localhost:5174",
   "https://presenta-rose.vercel.app",
   "https://presenta-rose.vercel.app/",
-  "https://magcommunity.vercel.app",          // ⭐ нов
-  "https://magcommunity.vercel.app/", 
+  "https://magcommunity.vercel.app",
+  "https://magcommunity.vercel.app/",
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
@@ -76,7 +76,7 @@ app.get("/", (req, res) => {
   res.json({
     name: "Presenta Live Server",
     status: "online",
-    version: "2.3.0",
+    version: "2.4.0",
     supabase: !!supabase
   });
 });
@@ -85,7 +85,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     service: "presenta-live-server",
-    version: "2.3.0",
+    version: "2.4.0",
     supabase: !!supabase
   });
 });
@@ -113,7 +113,7 @@ app.post("/api/presentations", async (req, res) => {
       .insert({
         title,
         slides,
-        course_id: courseId || null,      // ⭐ ново
+        course_id: courseId || null,
       })
       .select()
       .single();
@@ -138,12 +138,11 @@ app.get("/api/presentations", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("presentations")
-      .select("id, title, course_id, created_at, updated_at")   // ⭐ добавен course_id
+      .select("id, title, course_id, created_at, updated_at")
       .order("updated_at", { ascending: false });
 
     if (error) throw error;
 
-    // Мапваме course_id → courseId (frontend очаква camelCase)
     const presentations = (data || []).map((p) => ({
       id: p.id,
       title: p.title,
@@ -175,12 +174,11 @@ app.get("/api/presentations/:id", async (req, res) => {
 
     if (error) throw error;
 
-    // Мапваме course_id → courseId
     res.json({
       id: data.id,
       title: data.title,
       slides: data.slides,
-      courseId: data.course_id || null,   // ⭐
+      courseId: data.course_id || null,
       created_at: data.created_at,
       updated_at: data.updated_at,
     });
@@ -203,7 +201,7 @@ app.put("/api/presentations/:id", async (req, res) => {
     const updates = {};
     if (title !== undefined) updates.title = title;
     if (slides !== undefined) updates.slides = slides;
-    if (courseId !== undefined) updates.course_id = courseId || null;  // ⭐
+    if (courseId !== undefined) updates.course_id = courseId || null;
 
     const { data, error } = await supabase
       .from("presentations")
@@ -778,6 +776,35 @@ function handleMessage(session, socket, message) {
       break;
     }
 
+    // ═══════════════════════════════════════════════════════
+    // 💻 CODE SUBMISSION — ученик пише код, broadcast към всички
+    // Без запис в DB. Само live препредаване към учителя.
+    // ═══════════════════════════════════════════════════════
+    case "CODE_SUBMISSION": {
+      if (typeof message.code !== "string") return;
+      if (!message.name) return;
+
+      const slideIndex =
+        message.slideIndex !== undefined
+          ? message.slideIndex
+          : session.currentSlide;
+
+      console.log(
+        `💻 ${message.avatar || ""} ${message.name} пише на слайд ${slideIndex} (${message.code.length} chars)`
+      );
+
+      broadcast(session, {
+        type: "CODE_SUBMISSION",
+        slideIndex,
+        name: message.name,
+        avatar: message.avatar || null,
+        code: message.code,
+        timestamp: message.timestamp || Date.now()
+      });
+
+      break;
+    }
+
     case "PING": {
       send(socket, { type: "PONG" });
       break;
@@ -831,7 +858,7 @@ function generateSessionId() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("======================================");
-  console.log(" PRESENTA LIVE SERVER v2.3.0");
+  console.log(" PRESENTA LIVE SERVER v2.4.0");
   console.log("======================================");
   console.log(`Port: ${PORT}`);
   console.log("");
