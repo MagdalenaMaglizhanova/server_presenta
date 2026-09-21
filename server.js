@@ -76,7 +76,7 @@ app.get("/", (req, res) => {
   res.json({
     name: "Presenta Live Server",
     status: "online",
-    version: "2.5.0",
+    version: "2.4.0",
     supabase: !!supabase
   });
 });
@@ -85,7 +85,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     service: "presenta-live-server",
-    version: "2.5.0",
+    version: "2.4.0",
     supabase: !!supabase
   });
 });
@@ -805,38 +805,6 @@ function handleMessage(session, socket, message) {
       break;
     }
 
-    // ═══════════════════════════════════════════════════════
-    // 🛑 END SESSION — учителят прекратява от WS (fast path)
-    // Двоен сигур с REST DELETE — и двата broadcast-ват SESSION_ENDED
-    // ═══════════════════════════════════════════════════════
-    case "END_SESSION": {
-      console.log(`[WS] 🛑 Учител прекратява сесия през WS`);
-
-      // Broadcast към всички ученици в стаята
-      broadcast(session, { type: "SESSION_ENDED" });
-
-      // Затвори всички клиентски сокети
-      for (const client of session.clients) {
-        try {
-          client.close(1000, "Session ended");
-        } catch (error) {
-          console.error("[WS] Error closing client:", error.message);
-        }
-      }
-
-      // Изчисти сесията от паметта (намираме я по reference)
-      const sessionIdToDelete = [...sessions.entries()].find(
-        ([, s]) => s === session
-      )?.[0];
-
-      if (sessionIdToDelete) {
-        sessions.delete(sessionIdToDelete);
-        console.log(`[SESSION] Ended via WS: ${sessionIdToDelete}`);
-      }
-
-      break;
-    }
-
     case "PING": {
       send(socket, { type: "PONG" });
       break;
@@ -890,7 +858,7 @@ function generateSessionId() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("======================================");
-  console.log(" PRESENTA LIVE SERVER v2.5.0");
+  console.log(" PRESENTA LIVE SERVER v2.4.0");
   console.log("======================================");
   console.log(`Port: ${PORT}`);
   console.log("");
