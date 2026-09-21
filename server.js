@@ -76,7 +76,7 @@ app.get("/", (req, res) => {
   res.json({
     name: "Presenta Live Server",
     status: "online",
-    version: "2.4.0",
+    version: "2.5.0",
     supabase: !!supabase
   });
 });
@@ -85,7 +85,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     service: "presenta-live-server",
-    version: "2.4.0",
+    version: "2.5.0",
     supabase: !!supabase
   });
 });
@@ -305,6 +305,7 @@ app.post("/api/sessions", async (req, res) => {
     teacherSocket: null,
     clients: new Set(),
     students: new Map(),
+    studentAttention: new Map(), // ⭐ NEW: name → { isFocused, avatar, timestamp }
     startedAt: startTime
   });
 
@@ -482,6 +483,14 @@ wss.on("connection", (socket, request) => {
     });
   }
 
+  // ⭐ Изпращаме текущия attention snapshot на новия клиент
+  if (session.studentAttention && session.studentAttention.size > 0) {
+    send(socket, {
+      type: "STUDENT_ATTENTION_LIST",
+      attention: getAttentionList(session)
+    });
+  }
+
   if (session.slides) {
     console.log(`📤 Изпращаме ${session.slides.length} слайда на нов клиент`);
     send(socket, {
@@ -508,11 +517,31 @@ wss.on("connection", (socket, request) => {
   });
 
   socket.on("close", () => {
+    // ⭐ Намери името на ученика преди да го изтрием
+    const studentData = session.students.get(socket);
+
     session.clients.delete(socket);
     session.students.delete(socket);
 
     if (session.teacherSocket === socket) {
       session.teacherSocket = null;
+    }
+
+    // ⭐ Изчисти attention status-а и уведоми учителя
+    if (studentData && session.studentAttention) {
+      const wasTracked = session.studentAttention.has(studentData.name);
+      session.studentAttention.delete(studentData.name);
+
+      if (wasTracked && session.teacherSocket && session.teacherSocket.readyState === 1) {
+        send(session.teacherSocket, {
+          type: "STUDENT_ATTENTION",
+          name: studentData.name,
+          avatar: studentData.avatar,
+          isFocused: false,
+          disconnected: true, // ⭐ флаг за да знае клиента че е disconnect
+          timestamp: Date.now()
+        });
+      }
     }
 
     console.log(`[WS] Client disconnected → ${sessionId} | clients: ${session.clients.size} | students: ${session.students.size}`);
@@ -778,7 +807,6 @@ function handleMessage(session, socket, message) {
 
     // ═══════════════════════════════════════════════════════
     // 💻 CODE SUBMISSION — ученик пише код, broadcast към всички
-    // Без запис в DB. Само live препредаване към учителя.
     // ═══════════════════════════════════════════════════════
     case "CODE_SUBMISSION": {
       if (typeof message.code !== "string") return;
@@ -801,6 +829,45 @@ function handleMessage(session, socket, message) {
         code: message.code,
         timestamp: message.timestamp || Date.now()
       });
+
+      break;
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // 👁️ STUDENT_ATTENTION — ученик влиза/излиза от таба
+    // Пазим статуса и препращаме САМО на учителя
+    // ═══════════════════════════════════════════════════════
+    case "STUDENT_ATTENTION": {
+      if (!message.name) return;
+
+      const isFocused = message.isFocused !== false;
+      const timestamp = message.timestamp || Date.now();
+
+      // ⭐ Пазим последния статус в session state
+      if (!session.studentAttention) {
+        session.studentAttention = new Map();
+      }
+
+      session.studentAttention.set(message.name, {
+        isFocused,
+        avatar: message.avatar || null,
+        timestamp
+      });
+
+      console.log(
+        `👁️ ${message.avatar || ""} ${message.name} → ${isFocused ? "✅ focused" : "⚠️ DISTRACTED"}`
+      );
+
+      // ⭐ Изпращаме САМО на учителя (учениците нямат нужда от този broadcast)
+      if (session.teacherSocket && session.teacherSocket.readyState === 1) {
+        send(session.teacherSocket, {
+          type: "STUDENT_ATTENTION",
+          name: message.name,
+          avatar: message.avatar || null,
+          isFocused,
+          timestamp
+        });
+      }
 
       break;
     }
@@ -844,6 +911,25 @@ function send(socket, message) {
 }
 
 // ---------------------------------------------------------
+// ⭐ ATTENTION HELPERS
+// ---------------------------------------------------------
+
+function getAttentionList(session) {
+  if (!session.studentAttention) return [];
+
+  const list = [];
+  for (const [name, data] of session.studentAttention.entries()) {
+    list.push({
+      name,
+      avatar: data.avatar,
+      isFocused: data.isFocused,
+      timestamp: data.timestamp
+    });
+  }
+  return list;
+}
+
+// ---------------------------------------------------------
 // SESSION ID
 // ---------------------------------------------------------
 
@@ -858,7 +944,7 @@ function generateSessionId() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("======================================");
-  console.log(" PRESENTA LIVE SERVER v2.4.0");
+  console.log(" PRESENTA LIVE SERVER v2.5.0");
   console.log("======================================");
   console.log(`Port: ${PORT}`);
   console.log("");
