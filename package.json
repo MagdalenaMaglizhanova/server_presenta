@@ -1,7 +1,7 @@
 {
   "name": "presenta-server",
-  "version": "2.0.0",
-  "description": "Presenta live presentation server with Supabase integration",
+  "version": "2.6.0",
+  "description": "Presenta live presentation server with Supabase + Firebase Admin integration",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -11,6 +11,7 @@
     "@supabase/supabase-js": "^2.45.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
+    "google-auth-library": "^9.15.0",
     "ws": "^8.18.3"
   },
   "engines": {
